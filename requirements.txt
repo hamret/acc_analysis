@@ -1,0 +1,13 @@
+torch
+torchvision
+torchaudio
+ultralytics
+opencv-python
+numpy
+pandas
+flask
+flask-cors
+scipy
+matplotlib
+scikit-learn
+tqdm

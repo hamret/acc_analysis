@@ -1,0 +1,165 @@
+/* ======================================== */
+/* 기본 스타일 */
+/* ======================================== */
+
+body {
+    margin: 0;
+    font-family: 'Inter', 'Pretendard', sans-serif;
+    background: #0e0e0e;
+    color: white;
+}
+
+/* ======================================== */
+/* 랜딩 페이지 */
+/* ======================================== */
+
+.landing-body {
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+}
+
+.landing-container {
+    text-align:center;
+    max-width:900px;
+    padding:40px;
+}
+
+.landing-title {
+    font-size:48px;
+    font-weight:800;
+    color:#fff;
+    margin-bottom:20px;
+}
+
+.landing-desc {
+    font-size:20px;
+    color:#ccc;
+    margin-bottom:40px;
+    line-height:1.6;
+}
+
+.landing-features {
+    display:flex;
+    justify-content:center;
+    gap:20px;
+    margin-bottom:40px;
+}
+
+.feature-box {
+    background:#1a1a1a;
+    padding:20px;
+    width:250px;
+    border-radius:10px;
+    border:1px solid #333;
+}
+.feature-box h3 { color:#ff5500; }
+
+
+.landing-button {
+    display:inline-block;
+    padding:15px 40px;
+    font-size:20px;
+    background:#ff5500;
+    color:white;
+    border-radius:8px;
+    text-decoration:none;
+    font-weight:700;
+    transition:0.2s;
+}
+.landing-button:hover {
+    background:#ff6a1a;
+}
+
+
+/* ======================================== */
+/* 분석 페이지 */
+/* ======================================== */
+
+.header {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:20px 40px;
+    background:#0f0f0f;
+    border-bottom:1px solid #222;
+}
+
+.header h1 {
+    margin:0;
+    font-size:28px;
+    color:#ff5500;
+}
+
+.header-link {
+    color:#fff;
+    text-decoration:none;
+    font-size:16px;
+    opacity:0.7;
+}
+.header-link:hover {
+    opacity:1;
+}
+
+
+.upload-section {
+    max-width:700px;
+    margin:40px auto;
+    background:#1a1a1a;
+    padding:30px;
+    border-radius:12px;
+    border:1px solid #333;
+}
+
+.file-input label {
+    font-size:18px;
+    display:block;
+    margin-bottom:5px;
+    color:#ff5500;
+}
+.file-input input {
+    width:100%;
+    padding:10px;
+    border-radius:6px;
+    border:0;
+    margin-bottom:20px;
+    background:#111;
+    color:white;
+}
+
+
+.upload-button {
+    width:100%;
+    padding:15px;
+    background:#ff5500;
+    border:0;
+    color:white;
+    font-size:18px;
+    border-radius:8px;
+    cursor:pointer;
+    font-weight:700;
+    transition:0.2s;
+}
+.upload-button:hover {
+    background:#ff6a1a;
+}
+
+.status-box {
+    margin-top:20px;
+    padding:15px;
+    background:#111;
+    border:1px solid #333;
+    border-radius:6px;
+    font-size:16px;
+}
+
+.result-box {
+    max-width:900px;
+    margin:40px auto;
+    background:#181818;
+    padding:30px;
+    border-radius:10px;
+    border:1px solid #333;
+    white-space:pre-wrap;
+}

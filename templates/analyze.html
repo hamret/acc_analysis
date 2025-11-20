@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>ACC Analyzer - 분석</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body class="analyze-body">
+
+    <div class="header">
+        <h1>ACC Analyzer</h1>
+        <a href="/" class="header-link">홈으로</a>
+    </div>
+
+    <div class="upload-section">
+
+        <h2>주행 영상 & 텔레메트리 업로드</h2>
+
+        <div class="file-input">
+            <label>🎥 주행 영상 (MP4)</label>
+            <input type="file" id="videoFile" accept="video/mp4">
+        </div>
+
+        <div class="file-input">
+            <label>📊 텔레메트리 CSV</label>
+            <input type="file" id="csvFile" accept=".csv">
+        </div>
+
+        <button id="uploadBtn" class="upload-button">업로드 + 분석 시작</button>
+
+        <div id="statusBox" class="status-box"></div>
+
+    </div>
+
+    <div id="resultBox" class="result-box"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
