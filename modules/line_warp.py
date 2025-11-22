@@ -50,20 +50,6 @@ class LineWarpEngine:
     # 2) 전체 레이싱 라인을 드론 영상 좌표계로 변환
     # ------------------------------------------------------------
     def warp_lines_to_video_view(self, trajectory, meta):
-        """
-        trajectory = {
-            "x": [...],
-            "y": [...],
-            "frame_map": [...]
-        }
-        meta = {
-            "width": int,
-            "height": int,
-            "fps": float,
-            ...
-        }
-        """
-
         print("[WARP] 레이싱 라인 영상 좌표 변환 시작...")
 
         xs = trajectory["x"]
@@ -72,7 +58,10 @@ class LineWarpEngine:
 
         warped = []
 
-        for i in range(len(xs)):
+        # 🔥 안전한 루프 길이 설정
+        n = min(len(xs), len(fm))
+
+        for i in range(n):
             if fm[i] is None:
                 warped.append(None)
                 continue

@@ -152,8 +152,8 @@ def analyze():
         # 7) 성능 분석
         performance = perf_analyzer.analyze(telemetry, trajectory)
 
-        # 8) AI 피드백 생성
-        feedback = ai_feedback.generate_feedback(performance)
+        # 8) AI 피드백 생성 (🔥 인자 3개 넣어줘야 함)
+        feedback = ai_feedback.generate_feedback(telemetry, trajectory, performance)
 
         return jsonify({
             "success": True,
