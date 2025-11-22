@@ -1,10 +1,9 @@
 import os
 import json
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory, render_template
+from flask import Flask, request, jsonify, render_template, send_from_directory
 
 import config
-
 from modules.video_processor import VideoProcessor
 from modules.telemetry_parser import TelemetryParser
 from modules.trajectory_analyzer import TrajectoryAnalyzer
@@ -15,12 +14,12 @@ from modules.ai_feedback import AIFeedbackEngine
 
 
 # ===============================================================
-# Flask 서버 생성
+# Flask App
 # ===============================================================
 app = Flask(
     __name__,
-    template_folder="templates",
-    static_folder="static"
+    static_folder="static",
+    template_folder="templates"
 )
 
 app.config["UPLOAD_FOLDER"] = config.UPLOAD_DIR
@@ -31,7 +30,7 @@ os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
 
 # ===============================================================
-# 엔진 초기화
+# Engines
 # ===============================================================
 video_processor = VideoProcessor()
 telemetry_parser = TelemetryParser()
@@ -43,7 +42,7 @@ ai_feedback = AIFeedbackEngine()
 
 
 # ===============================================================
-# 0) 랜딩 페이지
+# Pages
 # ===============================================================
 @app.route("/")
 def index():
@@ -56,7 +55,7 @@ def analyze_page():
 
 
 # ===============================================================
-# 1) 업로드 API
+# Upload API
 # ===============================================================
 @app.route("/api/upload", methods=["POST"])
 def upload_files():
@@ -86,7 +85,7 @@ def upload_files():
 
 
 # ===============================================================
-# 2) 분석 API
+# Main Analysis API
 # ===============================================================
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
@@ -96,15 +95,16 @@ def analyze():
     if not upload_id:
         return jsonify({"success": False, "error": "upload_id가 전달되지 않았습니다."})
 
-    # 업로드 디렉토리에서 파일 검색
+    # 파일 검색
     video_path, tel_path = None, None
-    for file in os.listdir(config.UPLOAD_DIR):
-        if file.startswith(upload_id):
-            lower = file.lower()
+    for f in os.listdir(config.UPLOAD_DIR):
+        if f.startswith(upload_id):
+            lower = f.lower()
+            full = os.path.join(config.UPLOAD_DIR, f)
             if lower.endswith(".mp4"):
-                video_path = os.path.join(config.UPLOAD_DIR, file)
+                video_path = full
             elif lower.endswith(".csv"):
-                tel_path = os.path.join(config.UPLOAD_DIR, file)
+                tel_path = full
 
     if not video_path:
         return jsonify({"success": False, "error": "업로드된 영상 파일을 찾을 수 없습니다."})
@@ -119,10 +119,10 @@ def analyze():
         # 1) 영상 분석
         meta, yolo_traj = video_processor.process(video_path)
 
-        # 2) 텔레메트리 파싱
+        # 2) CSV 텔레메트리 파싱
         telemetry = telemetry_parser.parse_file(tel_path)
 
-        # 3) XY 좌표 변환
+        # 3) XY 주행 라인 생성
         trajectory = trajectory_analyzer.create_trajectory(telemetry)
 
         # 4) 싱크 계산
@@ -138,7 +138,7 @@ def analyze():
         )
         trajectory["frame_map"] = frame_map
 
-        # 5) Warp 적용
+        # 5) 레이싱 라인 Warp
         warped_lines = line_warper.warp_lines_to_video_view(trajectory, meta)
 
         # 6) 오버레이 영상 렌더링
@@ -153,7 +153,7 @@ def analyze():
         performance = perf_analyzer.analyze(telemetry, trajectory)
 
         # 8) AI 피드백 생성
-        feedback = ai_feedback.generate_feedback(telemetry, trajectory, performance)
+        feedback = ai_feedback.generate_feedback(performance)
 
         return jsonify({
             "success": True,
@@ -163,6 +163,11 @@ def analyze():
         })
 
     except Exception as e:
+        print("\n======== 내부 오류 발생 ========")
+        import traceback
+        traceback.print_exc()
+        print("================================\n")
+
         return jsonify({
             "success": False,
             "error": str(e)
@@ -170,7 +175,7 @@ def analyze():
 
 
 # ===============================================================
-# 출력 파일
+# Outputs
 # ===============================================================
 @app.route("/outputs/<path:filename>")
 def get_output(filename):
@@ -178,7 +183,7 @@ def get_output(filename):
 
 
 # ===============================================================
-# 실행
+# Run Server
 # ===============================================================
 if __name__ == "__main__":
     print("======================================================")
