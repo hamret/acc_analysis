@@ -4,32 +4,27 @@ import os
 import torch
 from ultralytics import YOLO
 from ultralytics.nn.tasks import WorldModel
+from filterpy.kalman import KalmanFilter
 
-# PyTorch 2.6 safe-load fix
 torch.serialization.add_safe_globals([WorldModel])
 
+
 class VideoProcessor:
+
     def __init__(self):
         print("[VideoProcessor] 초기화 중...")
 
-        # ------------------------------------------------------------
-        # 1) GPU 장치 선택
-        # ------------------------------------------------------------
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"[VideoProcessor] YOLO 디바이스: {self.device}")
 
-        # ------------------------------------------------------------
-        # 2) 모델 자동 선택
-        # ------------------------------------------------------------
-        # 우선순위:
-        # 1) 프로젝트 로컬에 worldv2 있으면 그걸 사용
-        # 2) 없으면 기존 yolov8m.pt 사용
-        # ------------------------------------------------------------
+        # -------------------------------------------------------
+        # 1) YOLO 모델 자동 로드
+        # -------------------------------------------------------
         model_candidates = [
             "models/yolov8x-worldv2.pt",
             "models/yolov8m.pt",
-            "yolov8x-worldv2.pt",  # pip 설치된 모델
-            "yolov8m.pt"
+            "yolov8x-worldv2.pt",
+            "yolov8m.pt",
         ]
 
         model_path = None
@@ -39,88 +34,165 @@ class VideoProcessor:
                 break
 
         if model_path is None:
-            raise FileNotFoundError(
-                "YOLO 모델 파일을 찾을 수 없습니다.\n"
-                "models/yolov8x-worldv2.pt 또는 yolov8m.pt 위치에 모델을 넣어주세요."
-            )
+            raise FileNotFoundError("YOLO 모델 파일을 찾을 수 없습니다.")
 
         print(f"[VideoProcessor] 모델 로딩: {model_path}")
         self.model = YOLO(model_path)
 
-        # ------------------------------------------------------------
-        # 3) 검출 안정화를 위한 버퍼
-        # ------------------------------------------------------------
-        self.last_box = None   # 마지막 박스
-        self.smooth_factor = 0.7  # 0 ~ 1 (값 커질수록 더 부드러움)
+        # -------------------------------------------------------
+        # 2) 차량 HSV 히스토그램 (사용자가 제공)
+        # -------------------------------------------------------
+        self.hist_h = np.load(r"C:\Users\user\PycharmProjects\acc_analysis\car_hist_h.npy")
+        self.hist_s = np.load(r"C:\Users\user\PycharmProjects\acc_analysis\car_hist_s.npy")
+        self.hist_v = np.load(r"C:\Users\user\PycharmProjects\acc_analysis\car_hist_v.npy")
 
-    # ------------------------------------------------------------------
-    # YOLO 박스 안정화
-    # ------------------------------------------------------------------
-    def smooth_box(self, new_box):
-        if self.last_box is None:
-            self.last_box = new_box
-            return new_box
+        # Resize → 모든 hist 크기 동일하게 보정
+        self.hist_h = cv2.resize(self.hist_h.astype(np.float32), (1, 180)).flatten()
+        self.hist_s = cv2.resize(self.hist_s.astype(np.float32), (1, 256)).flatten()
+        self.hist_v = cv2.resize(self.hist_v.astype(np.float32), (1, 256)).flatten()
 
-        # previous * a + new * (1-a)
-        smoothed = self.last_box * self.smooth_factor + new_box * (1 - self.smooth_factor)
-        self.last_box = smoothed
-        return smoothed
+        # -------------------------------------------------------
+        # 3) Kalman Filter
+        # -------------------------------------------------------
+        self.kf = self._create_kalman()
+        self.kf_ready = False
 
-    # ------------------------------------------------------------------
-    # 차량 검출 (YOLO)
-    # ------------------------------------------------------------------
+        self.last_box = None
+        self.alpha = 0.65  # Smooth factor
+
+
+    # ===========================================================
+    # Kalman 필터 구성
+    # ===========================================================
+    def _create_kalman(self):
+        kf = KalmanFilter(dim_x=4, dim_z=2)
+
+        kf.x = np.array([0, 0, 0, 0])
+
+        kf.F = np.array([
+            [1, 0, 1, 0],
+            [0, 1, 0, 1],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+        ])
+
+        kf.H = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+        ])
+
+        kf.P *= 15
+        kf.R = np.eye(2) * 3
+        kf.Q = np.eye(4) * 0.05
+        return kf
+
+
+    # ===========================================================
+    # Bhattacharyya 거리 계산
+    # ===========================================================
+    def bhatta_distance(self, h1, h2):
+        h1 = h1.flatten().astype(np.float64)
+        h2 = h2.flatten().astype(np.float64)
+
+        h1 /= (h1.sum() + 1e-6)
+        h2 /= (h2.sum() + 1e-6)
+
+        bc = np.sum(np.sqrt(h1 * h2))
+        return np.sqrt(max(0, 1 - bc))
+
+
+    # ===========================================================
+    # 후보 박스 중에서 "가장 우리 차량" 선택
+    # ===========================================================
+    def choose_best_box(self, frame, boxes):
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        best_score = 9999
+        best_box = None
+
+        for b in boxes:
+            x1, y1, x2, y2 = map(int, b)
+
+            # 너무 작으면 제외
+            if x2 - x1 < 40 or y2 - y1 < 40:
+                continue
+
+            crop = hsv[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+
+            h = cv2.calcHist([crop], [0], None, [180], [0, 180])
+            s = cv2.calcHist([crop], [1], None, [256], [0, 256])
+            v = cv2.calcHist([crop], [2], None, [256], [0, 256])
+
+            score = (
+                self.bhatta_distance(self.hist_h, h) +
+                self.bhatta_distance(self.hist_s, s) +
+                self.bhatta_distance(self.hist_v, v)
+            )
+
+            if score < best_score:
+                best_score = score
+                best_box = b
+
+        return best_box
+
+
+    # ===========================================================
+    # YOLO + HSV 히스토그램 기반 차량 인식
+    # ===========================================================
     def detect_car(self, frame):
-        h, w = frame.shape[:2]
+        H, W = frame.shape[:2]
+
         results = self.model.predict(
-            source=frame,
-            conf=0.3,       # 인식 정확도 강화
-            iou=0.5,
-            verbose=False,
-            device=self.device
+            frame, conf=0.35, iou=0.45,
+            device=self.device, verbose=False
         )
 
-        if len(results) == 0:
+        if len(results) == 0 or results[0].boxes is None:
             return None
 
-        r = results[0]
-        if r.boxes is None or len(r.boxes.xyxy) == 0:
+        boxes = results[0].boxes.xyxy.cpu().numpy()
+
+        # ROI: 화면 아래 45%만 허용
+        candidates = []
+        for b in boxes:
+            x1, y1, x2, y2 = b
+            cy = (y1 + y2) / 2
+            if cy > H * 0.45:
+                candidates.append(b)
+
+        if len(candidates) == 0:
             return None
 
-        # 가장 큰 박스 = 차량일 확률 높음
-        boxes = r.boxes.xyxy.cpu().numpy()
-        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-        main_idx = np.argmax(areas)
-        box = boxes[main_idx]
+        # 히스토그램 기반으로 "우리 차"와 가장 가까운 박스 선택
+        best = self.choose_best_box(frame, candidates)
+        if best is None:
+            return None
 
-        # 안정화 적용
-        box = self.smooth_box(box)
+        # Smooth
+        best = np.array(best)
+        if self.last_box is not None:
+            best = self.last_box * self.alpha + best * (1 - self.alpha)
+        self.last_box = best.copy()
 
-        x1, y1, x2, y2 = box.astype(int)
-        return (x1, y1, x2, y2)
+        return best.astype(int)
 
-    # ------------------------------------------------------------------
-    # 비디오 처리 + YOLO 검출 + 차량 위치 + 속도 추정
-    # ------------------------------------------------------------------
+
+    # ===========================================================
+    # 영상 처리
+    # ===========================================================
     def process(self, video_path):
         print("[VideoProcessor] 비디오 처리 시작...")
 
         cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise RuntimeError(f"[VideoProcessor] 영상 로드 실패: {video_path}")
-
         fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        print(f"[VideoProcessor] FPS={fps}, Size={width}x{height}, Frames={total_frames}")
+        traj = {"car_pos": [], "speed": []}
 
-        trajectory = {
-            "speed": [],
-            "car_pos": []
-        }
-
-        frame_idx = 0
         last_center = None
 
         while True:
@@ -128,43 +200,57 @@ class VideoProcessor:
             if not ret:
                 break
 
-            # YOLO 차량 검출
             box = self.detect_car(frame)
 
-            if box:
+            if box is not None:
                 x1, y1, x2, y2 = box
                 cx = (x1 + x2) // 2
                 cy = (y1 + y2) // 2
 
-                trajectory["car_pos"].append((cx, cy))
+                if not self.kf_ready:
+                    self.kf.x[:2] = [cx, cy]
+                    self.kf_ready = True
 
-                # 영상 속도 추정 = center 이동량
-                if last_center is not None:
-                    dist = np.linalg.norm(np.array([cx, cy]) - np.array(last_center))
-                else:
-                    dist = 0
-
-                trajectory["speed"].append(dist)
-                last_center = (cx, cy)
+                self.kf.update([cx, cy])
 
             else:
-                trajectory["car_pos"].append(None)
-                trajectory["speed"].append(0)
-                last_center = None
+                if self.kf_ready:
+                    self.kf.predict()
+                else:
+                    traj["car_pos"].append(None)
+                    traj["speed"].append(0)
+                    continue
 
-            frame_idx += 1
+            # 칼만 예측 항상 실행
+            self.kf.predict()
+            cx, cy = int(self.kf.x[0]), int(self.kf.x[1])
+
+            # speed 계산
+            if last_center is not None:
+                spd = np.linalg.norm(np.array([cx, cy]) - np.array(last_center))
+            else:
+                spd = 0
+
+            last_center = (cx, cy)
+
+            traj["car_pos"].append((cx, cy))
+            traj["speed"].append(spd)
 
         cap.release()
 
         print("[VideoProcessor] 영상 처리 완료!")
-        return \
-            {"fps": fps, "width": width, "height": height, "frames": total_frames}, \
-            trajectory
+        return {
+            "fps": fps,
+            "width": W,
+            "height": H,
+            "frames": total
+        }, traj
 
-    # ------------------------------------------------------------------
-    # Warp된 라인을 영상 위에 그려서 MP4로 저장
-    # ------------------------------------------------------------------
-    def render_overlay(self, input_video, warped_points, yolo_traj, output_path):
+
+    # ===========================================================
+    # Warp된 레이싱 라인 + 차량 위치를 영상에 그리기
+    # ===========================================================
+    def render_overlay(self, input_video, warped, yolo_traj, output_path):
         print("[VideoProcessor] 오버레이 렌더링 시작...")
 
         cap = cv2.VideoCapture(input_video)
@@ -172,8 +258,7 @@ class VideoProcessor:
         W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(output_path, fourcc, fps, (W, H))
+        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
 
         idx = 0
 
@@ -182,21 +267,21 @@ class VideoProcessor:
             if not ret:
                 break
 
-            # YOLO 박스 + 차량 경로 표시
-            if yolo_traj["car_pos"][idx] is not None:
+            # 차량 위치 표시
+            if idx < len(yolo_traj["car_pos"]) and yolo_traj["car_pos"][idx] is not None:
                 cx, cy = yolo_traj["car_pos"][idx]
-                cv2.circle(frame, (cx, cy), 5, (0, 255, 255), -1)
+                cv2.circle(frame, (cx, cy), 6, (0, 255, 255), -1)
 
-            # 레이싱 라인 표시
-            if warped_points[idx] is not None:
-                u, v = warped_points[idx]
-                cv2.circle(frame, (u, v), 4, (0, 128, 255), -1)
+            # 레이싱 라인 현재 프레임
+            if idx < len(warped) and warped[idx] is not None:
+                u, v = warped[idx]
+                cv2.circle(frame, (u, v), 5, (0, 128, 255), -1)
 
-            # 누적 레이싱 라인
-            for i in range(max(0, idx - 300), idx):
-                if warped_points[i] is not None:
-                    uu, vv = warped_points[i]
-                    cv2.circle(frame, (uu, vv), 1, (0, 80, 255), -1)
+            # 과거 라인
+            for j in range(max(0, idx - 250), idx):
+                if j < len(warped) and warped[j] is not None:
+                    uu, vv = warped[j]
+                    cv2.circle(frame, (uu, vv), 2, (0, 80, 255), -1)
 
             out.write(frame)
             idx += 1
@@ -205,4 +290,4 @@ class VideoProcessor:
         out.release()
 
         print("[VideoProcessor] 오버레이 렌더링 완료!")
-        print(f"[VideoProcessor] 출력 파일 → {output_path}")
+        print(f"[VideoProcessor] → {output_path}")

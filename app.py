@@ -125,21 +125,29 @@ def analyze():
         # 3) XY 주행 라인 생성
         trajectory = trajectory_analyzer.create_trajectory(telemetry)
 
-        # 4) 싱크 계산
-        sync_offset = sync_calibrator.auto_sync(
-            yolo_traj["speed"], telemetry["speed"]
-        )
+        # ================================
+        # 3) YOLO distance progression
+        # ================================
+        yolo_dist = trajectory_analyzer.create_yolo_distance(yolo_traj["car_pos"])
 
-        frame_map = sync_calibrator.generate_frame_map(
-            fps=meta["fps"],
-            n_video=len(yolo_traj["speed"]),
-            n_tel=len(telemetry["speed"]),
-            sync_offset=sync_offset
-        )
+        # ================================
+        # 4) 텔레메트리 distance (원본)
+        # ================================
+        tel_dist = telemetry["distance"].values
+
+        # ================================
+        # 5) distance 기반 frame_map 생성
+        # ================================
+        frame_map = sync_calibrator.generate_frame_map_by_distance(yolo_dist, tel_dist)
+
         trajectory["frame_map"] = frame_map
 
         # 5) 레이싱 라인 Warp
-        warped_lines = line_warper.warp_lines_to_video_view(trajectory, meta)
+        warped_lines = line_warper.warp_lines_to_video_view(
+            trajectory,
+            meta,
+            yolo_traj["car_pos"]
+        )
 
         # 6) 오버레이 영상 렌더링
         output_name = f"{upload_id}_overlay.mp4"

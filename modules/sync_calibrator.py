@@ -1,67 +1,109 @@
 import numpy as np
+import scipy.signal as signal
 
 
 class SyncCalibrator:
 
-    # ------------------------------------------------------------
-    # 1) YOLO 속도 vs 텔레메트리 속도 자동 싱크
-    # ------------------------------------------------------------
-    def auto_sync(self, yolo_speed, tel_speed):
-        """
-        비디오 기반 YOLO 속도데이터 vs 텔레메트리 속도데이터 상관 분석으로 offset 찾기
-        """
+    # =========================================================
+    # 1) YOLO speed 계산 (x, y 픽셀 이동 기반)
+    # =========================================================
+    def compute_yolo_speed(self, car_pos):
+        speeds = []
+        prev = None
+        for p in car_pos:
+            if prev is None or p is None:
+                speeds.append(0)
+                prev = p
+                continue
 
-        print("[SYNC] 자동 싱크 계산중...")
+            px = np.linalg.norm(np.array(p) - np.array(prev))
+            speeds.append(px)
+            prev = p
+        return np.array(speeds)
 
-        # 리스트 → numpy (NaN 자동 정리)
-        y = np.array(yolo_speed, dtype=float)
-        t = np.array(tel_speed, dtype=float)
+    # =========================================================
+    # 2) smoothing 적용 (30프레임 윈도우)
+    # =========================================================
+    def smooth(self, arr, win=30):
+        if len(arr) < win:
+            return arr
+        kernel = np.ones(win) / win
+        return np.convolve(arr, kernel, mode="same")
 
-        # NaN 제거
-        y = np.nan_to_num(y)
-        t = np.nan_to_num(t)
+    # =========================================================
+    # 3) 신호 정규화
+    # =========================================================
+    def normalize(self, x):
+        x = np.array(x, dtype=float)
+        x = x - np.nanmean(x)
+        std = np.nanstd(x)
+        if std < 1e-6:
+            std = 1.0
+        return x / std
 
-        # 길이 맞추기
-        min_len = min(len(y), len(t))
-        y = y[:min_len]
-        t = t[:min_len]
+    # =========================================================
+    # 4) Cross-correlation 기반 자동 sync
+    # =========================================================
+    def auto_sync(self, yolo_speed_raw, telemetry_speed_raw):
 
-        if min_len < 10:
-            print("[SYNC] 데이터가 너무 짧아서 싱크 불가. offset=0 적용")
+        # 1) YOLO speed smoothing
+        yolo_speed = self.smooth(self.normalize(yolo_speed_raw), win=30)
+
+        # 2) 텔레메트리 speed smoothing
+        tel_speed = self.smooth(self.normalize(telemetry_speed_raw), win=200)
+
+        # 3) 길이 너무 짧으면 abort
+        if len(yolo_speed) < 100 or len(tel_speed) < 100:
+            print("[SYNC] 신호 길이가 너무 짧아서 sync=0 반환")
             return 0
 
-        # 상관계수 계산
-        corr = np.correlate(y - y.mean(), t - t.mean(), mode="full")
-        offset_idx = corr.argmax() - (len(y) - 1)
+        print(f"[SYNC] YOLO len = {len(yolo_speed)}, TEL len = {len(tel_speed)}")
 
-        print(f"[SYNC] 계산된 offset (프레임) = {offset_idx}")
-        return int(offset_idx) * 16  # ms 환산 (예: 60fps 기준 16ms/frame)
+        # 4) cross-correlation 계산
+        corr = signal.correlate(tel_speed, yolo_speed, mode="full")
 
-    # ------------------------------------------------------------
-    # 2) frame → telemetry index 매핑
-    # ------------------------------------------------------------
+        # peak 찾기
+        shift = np.argmax(corr) - (len(yolo_speed) - 1)
+
+        print(f"[SYNC] best offset (frame) = {shift}")
+        return shift
+
+    # =========================================================
+    # 5) frame map 생성
+    # =========================================================
     def generate_frame_map(self, fps, n_video, n_tel, sync_offset):
-        """
-        fps : 영상 FPS
-        n_video : 전체 영상 프레임 수
-        n_tel : 텔레메트리 샘플 수
-        sync_offset : ms 단위 싱크 오프셋 (auto_sync 결과)
-        """
-
-        ms_per_frame = 1000 / fps
         frame_map = []
 
-        for f in range(n_video):
-            # f 프레임의 timestamp (ms)
-            t = f * ms_per_frame - sync_offset
-
-            # 텔레메트리 인덱스
-            tel_idx = int(t / ms_per_frame)
-
-            # 범위 밖이면 None
-            if tel_idx < 0 or tel_idx >= n_tel:
-                frame_map.append(None)
-            else:
+        for i in range(n_video):
+            tel_idx = i + sync_offset
+            if 0 <= tel_idx < n_tel:
                 frame_map.append(tel_idx)
+            else:
+                frame_map.append(None)
+
+        return frame_map
+
+    def generate_frame_map_by_distance(self, yolo_dist, tel_dist):
+        yolo_dist = np.array(yolo_dist, dtype=float)
+        tel_dist = np.array(tel_dist, dtype=float)
+
+        # 1) Normalize to 0~1 progression
+        y = (yolo_dist - yolo_dist.min()) / (yolo_dist.max() - yolo_dist.min() + 1e-6)
+        t = (tel_dist - tel_dist.min()) / (tel_dist.max() - tel_dist.min() + 1e-6)
+
+        frame_map = []
+
+        j = 0  # telemetry index
+        T = len(t)
+
+        # 2) For each YOLO point, find nearest telemetry progression
+        for i in range(len(y)):
+            yi = y[i]
+
+            # advance telemetry index until t[j] >= yi
+            while j + 1 < T and abs(t[j + 1] - yi) < abs(t[j] - yi):
+                j += 1
+
+            frame_map.append(j)
 
         return frame_map

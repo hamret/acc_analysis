@@ -4,61 +4,52 @@ import cv2
 
 class LineWarpEngine:
     """
-    텔레메트리에서 얻은 XY 레이싱 라인을
-    드론/헬리캠 영상 좌표계로 투영하는 엔진
+    텔레메트리 XY 레이싱 라인을
+    헬리캠(Top-down) 영상 좌표로 매핑하는 전용 엔진
     """
 
     def __init__(self):
-        # 기본적인 전방 카메라 FOV 세팅 (ACC 기준 근사치)
-        self.fov_x = 78     # degrees
-        self.fov_y = 42     # degrees
+        # 헬리캠 시야에 맞춘 스케일 기본값 (필요하면 동적으로 조정)
+        self.scale_x = 0.035  # distance → 화면 이동량
+        self.scale_y = 22.0  # steer/lateral → 좌우 이동량
+
+        self.offset_x = 0.52  # 화면 중앙 기준 좌우 보정
+        self.offset_y = 0.82  # 화면 아래쪽 위치 고정
 
     # ------------------------------------------------------------
-    # 1) 월드 좌표계 -> 카메라 좌표계 (간단한 시점 변환)
+    # world (telemetry) → screen (video)
     # ------------------------------------------------------------
-    def world_to_camera(self, x, y, meta):
+    def world_to_screen(self, x, y, meta):
         """
-        world XY -> 영상 좌표(u, v)
-        meta 안에는 영상폭/높이, 시점, scale 등이 들어있음
+        x: distance 기반 (앞뒤 이동)
+        y: steer 누적 기반 (좌우 이동)
         """
+        W = meta["width"]
+        H = meta["height"]
 
-        W, H = meta["width"], meta["height"]
+        # 좌우 (y 축) → 화면 중심 기준 이동
+        u = int(W * self.offset_x + y * self.scale_y)
 
-        # 텔레메트리 XY는 스파 서킷 평면 좌표인데,
-        # 영상에는 차량이 아래 중앙에 있으므로 기준 이동
-        cx, cy = 0, 0  # 차량 위치(원점)
+        # 앞뒤 (x 축) → 아래쪽에서 위로 올라오게
+        v = int(H * self.offset_y - x * self.scale_x)
 
-        # 상대 위치
-        dx = x - cx
-        dy = y - cy
+        # 화면 밖으로 넘어가지 않도록 clamp
+        u = max(0, min(W - 1, u))
+        v = max(0, min(H - 1, v))
 
-        # 헬리캠의 약간 위쪽에서 내려보는 시점
-        cam_height = 30.0
-        dz = cam_height
-
-        # 카메라 투영
-        fx = W / (2 * np.tan(np.radians(self.fov_x / 2)))
-        fy = H / (2 * np.tan(np.radians(self.fov_y / 2)))
-
-        # 회전 없이 단순 투영
-        u = fx * (dx / dz) + (W / 2)
-        v = fy * (dy / dz) + (H * 0.8)  # 차량이 하단 20% 위치
-
-        return int(u), int(v)
+        return u, v
 
     # ------------------------------------------------------------
-    # 2) 전체 레이싱 라인을 드론 영상 좌표계로 변환
+    # 텔레메트리 전체 라인을 화면 좌표로 매핑
     # ------------------------------------------------------------
     def warp_lines_to_video_view(self, trajectory, meta):
         print("[WARP] 레이싱 라인 영상 좌표 변환 시작...")
 
-        xs = trajectory["x"]
-        ys = trajectory["y"]
-        fm = trajectory["frame_map"]
+        xs = trajectory["x"]  # distance 기반
+        ys = trajectory["y"]  # lateral 기반
+        fm = trajectory["frame_map"]  # 프레임 매핑
 
         warped = []
-
-        # 🔥 안전한 루프 길이 설정
         n = min(len(xs), len(fm))
 
         for i in range(n):
@@ -66,14 +57,26 @@ class LineWarpEngine:
                 warped.append(None)
                 continue
 
-            u, v = self.world_to_camera(xs[i], ys[i], meta)
+            u, v = self.world_to_screen(xs[i], ys[i], meta)
             warped.append((u, v))
 
         print("[WARP] 좌표 변환 완료!")
+        # ===================== DEBUG OUTPUT ======================
+        print("\n=== TRAJECTORY DEBUG ===")
+        print("len x =", len(xs))
+        print("x sample =", xs[:20])
+        print("y sample =", ys[:20])
+        print("frame_map sample =", fm[:20])
+
+        print("len warped =", len(warped))
+        print("warped sample =", warped[:20])
+        print("=====================================================\n")
+        # =========================================================
+
         return warped
 
     # ------------------------------------------------------------
-    # 3) 프레임에 맞춰 하이라이트 포인트 계산
+    # 특정 프레임에 해당하는 warped 좌표 가져오기
     # ------------------------------------------------------------
     def get_highlight_point(self, warped_points, frame_idx):
         if frame_idx < 0 or frame_idx >= len(warped_points):
