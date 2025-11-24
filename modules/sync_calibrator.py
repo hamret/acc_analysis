@@ -84,26 +84,24 @@ class SyncCalibrator:
         return frame_map
 
     def generate_frame_map_by_distance(self, yolo_dist, tel_dist):
-        yolo_dist = np.array(yolo_dist, dtype=float)
-        tel_dist = np.array(tel_dist, dtype=float)
+        # numpy 변환
+        y = np.array(yolo_dist, dtype=float)
+        t = np.array(tel_dist, dtype=float)
 
-        # 1) Normalize to 0~1 progression
-        y = (yolo_dist - yolo_dist.min()) / (yolo_dist.max() - yolo_dist.min() + 1e-6)
-        t = (tel_dist - tel_dist.min()) / (tel_dist.max() - tel_dist.min() + 1e-6)
+        # --- 1) 텔레메트리에서 distance 증가 전 구간 제거 ---
+        start = np.argmax(t > 1.0)
+        t = t[start:]
+
+        # --- 2) 진행률(0~1)로 변환 (shape 신경 안쓰고 linear scale) ---
+        y_norm = y / (y.max() + 1e-9)  # YOLO 전체 진행률
+        t_norm = t / (t.max() + 1e-9)  # TEL 전체 진행률
 
         frame_map = []
+        tel_idx = np.arange(len(t_norm))
 
-        j = 0  # telemetry index
-        T = len(t)
-
-        # 2) For each YOLO point, find nearest telemetry progression
-        for i in range(len(y)):
-            yi = y[i]
-
-            # advance telemetry index until t[j] >= yi
-            while j + 1 < T and abs(t[j + 1] - yi) < abs(t[j] - yi):
-                j += 1
-
-            frame_map.append(j)
+        # --- 3) 각 YOLO 진행률에 대응하는 TEL idx 매칭 ---
+        for d in y_norm:
+            idx = int(d * (len(t_norm) - 1))
+            frame_map.append(idx)
 
         return frame_map

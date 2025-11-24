@@ -13,10 +13,10 @@ class TrajectoryAnalyzer:
         time = telemetry["time"].to_numpy()
         yaw_rate_deg = telemetry["roty"].to_numpy()
         speed_kmh = telemetry["speed"].to_numpy()
-        dist_raw = telemetry["distance"].to_numpy()  # ← Spa 0~7000m 실측값 그대로
+        dist_raw = telemetry["distance"].to_numpy()  # Spa 0~19855m 실측값
 
         # =======================================
-        # 1) 실제 heading 계산 (deg/s → rad/s)
+        # 1) heading 계산
         # =======================================
         dt = np.diff(time, prepend=time[0])
         dt = np.clip(dt, 0.001, 0.2)
@@ -25,10 +25,22 @@ class TrajectoryAnalyzer:
         heading = np.cumsum(yaw_rate_rad * dt)
 
         # =======================================
-        # 2) XY는 distance 를 기준으로 정확하게 생성
+        # 2) XY 생성 (distance 기준)
         # =======================================
         x = dist_raw * np.cos(heading)
         y = dist_raw * np.sin(heading)
+
+        # =======================================
+        # 🔥 3) 0~1m 구간 제거 (초반 완전 정지 구간 삭제)
+        # =======================================
+        dist = dist_raw
+        valid_start = np.argmax(dist > 1.0)   # distance가 1m 넘는 지점부터
+
+        x = x[valid_start:]
+        y = y[valid_start:]
+        heading = heading[valid_start:]
+        speed_kmh = speed_kmh[valid_start:]
+        dist_raw = dist_raw[valid_start:]
 
         trajectory = {
             "x": x.tolist(),
@@ -41,7 +53,10 @@ class TrajectoryAnalyzer:
         print("[ANALYZE] 텔레메트리 XY 변환 완료!")
         return trajectory
 
+
+    # ===========================================
     # YOLO distance → 누적거리 계산
+    # ===========================================
     def create_yolo_distance(self, car_pos):
         dist = []
         last = None
@@ -54,7 +69,7 @@ class TrajectoryAnalyzer:
                 continue
 
             d = np.linalg.norm(np.array(p) - np.array(last))
-            total += d           # 🔥 누적
+            total += d
             dist.append(total)
             last = p
 

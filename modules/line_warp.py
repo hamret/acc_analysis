@@ -42,7 +42,7 @@ class LineWarpEngine:
     # ------------------------------------------------------------
     # 텔레메트리 전체 라인을 화면 좌표로 매핑
     # ------------------------------------------------------------
-    def warp_lines_to_video_view(self, trajectory, meta):
+    def warp_lines_to_video_view(self, trajectory, meta, yolo_pos):
         print("[WARP] 레이싱 라인 영상 좌표 변환 시작...")
 
         xs = trajectory["x"]  # distance 기반
